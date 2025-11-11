@@ -1,0 +1,327 @@
+desc:BLU
+tags: analysis FFT meter spectrum
+version: 1.3
+author: Cockos, Joep Vanlier, Karkas
+
+Copyright (C) 2007 Cockos Incorporated
+Copyright (C) 2018 Joep Vanlier
+Copyright (C) 2025 Karkas
+License: LGPL - http://www.gnu.org/licenses/lgpl-3.0.html
+
+in_pin:left input
+in_pin:right input
+options:no_meter
+@init
+
+//  interface 
+    theme       =   0; //  sea, rain, autumn (0 - 2)
+    theme2      =   0; //  sea, rain, autumn (0 - 2)
+    grid        =   1; //  volume scale: 0 dB, detailed, brief (0 - 2)
+    back        = .10; //  background transparency (0 - 1.0)
+    grid_a      = .06; //  grid transparency (0 - 1.0)
+    grid_v      = .18; //  values transparency (0 - 1.0) 
+    
+//  logic    
+    chan        =   1; //  stereo / mid-side (0 - 1)
+    slp         =   6; //  spectrum slope (dB on octave)
+    slp_g       =   6; //  grid slope (dB on octave)
+    min_v       = -70; //  floor (dB)
+    fft_sz      =  10; //  FFT size: 128,256,512,1024,2048,4096,8192,16384,32768 (3 - 11)
+    integr      =   0; //  integration time (ms) (0 - 2500)
+    wind        =   3; //  window: rectangular, hamming, blackman-harris, blackman (0 - 3)
+    phs         =   0; //  phase (0, 1)
+    scale       = 1.0; //  scaling (0 - 6.0)
+    
+//  expert
+gfx_ext_retina=2.0;
+ext_nodenorm=1.0;
+ext_noinit=1.0;
+ext_tail_size=1;
+recpos=0;
+max_fft_size=32768;
+shift=327680;
+recpos2=shift;
+fftsize=max_fft_size;
+gfx_clear=1;
+windowtype=-1;
+fftidx=-1;
+scaling=1;
+sl_f=slp_g/6;
+
+histsize=max_fft_size + (max_fft_size*0.5 - 1);
+window=histsize;
+fftworkspace=window+(max_fft_size*0.5 + 1);
+integrate_buf = fftworkspace + max_fft_size*2;
+
+histsize2=max_fft_size + (max_fft_size*0.5 - 1) + shift;
+fftworkspace2=window+(max_fft_size*0.5 + 1) + shift;
+integrate_buf2 = fftworkspace + max_fft_size*2 + shift;
+
+@block
+min_v != lfloor ? (
+  lfloor = min_v;
+  minvol=2*exp(log(10)/20*min_v);
+);
+
+theme == 0 ? 
+  r = 0; g = 1; b = 1; theme >= 1 ? (
+  r = 1; g = 1; b = 1; theme == 2 ? (
+  r = 1; g = 0.6; b = 0;)
+);
+
+theme2 == 0 ? 
+  r2 = 0; g2 = 0.5; b2 = 0.5; theme2 >= 1 ? (
+  r2 = 0; g2 = 0.5; b2 = 0.7; theme2 == 2 ? (
+  r2 = 0.5; g2 = 0.3; b2 = 0.;)
+);
+
+@sample
+/*
+//differenciator (octavegain alternative)
+out0 = spl0 - last0; out1 = spl1 - last1;
+last0 = spl0; last1 = spl1;
+last0 = last0*0.9998; last1 = last1*0.9998;
+sp0 = out0*7.8; sp1 = out1*7.8;
+a1 = sp0+sp1; b1 = sp0-sp1;
+*/
+
+chan ? (
+  out0 = spl0+spl1; out1 = spl1-spl0;) : 
+  (out0 = spl0*2; out1 = spl1*2;
+);
+
+abs(recpos[]=(out0)) > minvol ? update=1;
+recpos = ((recpos+1) >= histsize ? 0 : (recpos+1));
+
+abs(recpos2[]=(out1)) > minvol ? update=1;
+recpos2 = ((recpos2+1) >= histsize2 ? shift : (recpos2+1));
+
+@gfx 640 250
+
+gfx_ext_retina>1 ? gfx_setfont(1,"Serif",9*gfx_ext_retina,'b') : gfx_setfont(0);
+
+function drawFFT(rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb)
+(
+  buf1=rpos-fftsize;
+  buf1<bufStart ? buf1+=histsize;
+  buf2=window;
+  buf3=fftwspace;
+  loop(fftsize*.5 + 1,
+    buf3[] = buf1[]*buf2[];
+    buf3+=1;
+
+    buf2+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+  buf2-=1;
+  loop(fftsize*.5 - 1,
+    buf3[] = buf1[]*(buf2-=1)[];
+    buf3+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+ 
+  fft_real(fftwspace,fftsize);
+  fft_permute(fftwspace,fftsize/2);
+  fftwspace[1]=0;
+
+  ascale=gfx_h/$pi*0.25;
+  xscale=800/(fftsize-4);
+
+  buf3=fftwspace;
+  buf2=intbuf+max_fft_size*0.5;
+  i=0;
+  lx=0;
+  // Draw phase
+  phs ? loop(fftsize*0.5,
+    ang=-atan2(buf3[1],buf3[]);
+    buf3+=2;
+    
+    integrate_en ? (
+      ang = buf2[] += integrate_sc * (ang - buf2[]);
+      buf2+=1;
+    );
+  
+    ty2=ang*ascale + gfx_h*0.5;
+    tx = log(1.0+i*xscale)*wsc;
+
+    i ? 
+    ( 
+      gfX_r=0.3; gfx_g=0; gfx_b=0.3; gfx_a=1;
+      gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
+    );
+
+    lx=tx; ly2=ty2;
+    i+=1;
+  );  
+  
+  // Draw FFT
+  buf3=fftwspace;
+  buf2=intbuf;
+  lx=0;
+  i=0;
+  fill_slmin=gfx_h;
+  fill_slast=0;
+  
+  octavegain = floor(slp*10+0.5) * ((log(10)*2.0/10.0)/(log(2)*20.0));
+  octavegainoffs = log(950 * fftsize / srate);
+  
+  loop(fftsize*0.5,   
+    ty = log(max(sqr(buf3[0])+sqr(buf3[1]),(10^(-500/20*2))));
+    octavegain > 0 ? ty += (log(i+0.00000000000016) - octavegainoffs)*octavegain; //lo cut filter
+    
+    buf3+=2;    
+
+    integrate_en ? (
+      ty = buf2[] += integrate_sc * (ty - buf2[]);
+      buf2+=1;
+    );
+    
+    ty = ty*-0.5*sc;
+    tx = log(1.0+i*xscale)*wsc;           
+    
+    i ? 
+    ( 
+      gfX_r=rr;
+      gfx_g=gg;
+      gfx_b=bb;
+      
+      1/*fill?*/ ? (
+        gfx_a=1;
+        tx0=tx|0;
+        lx0=lx|0;
+        tx0>lx0? (
+          ly < gfx_h || ty < gfx_h ? gfx_triangle(lx0,max(gfx_h,ly),lx,ly,tx0-1,ty,tx0-1,max(gfx_h,ty));
+        ) : (
+          tx0 > fill_slast ? (
+           fill_slast < gfx_h ? gfx_line(fill_slast,gfx_h,fill_slast,fill_slmin);
+           fill_slmin=gfx_h;
+         ) : (
+           fill_slmin=min(fill_slmin,ty);
+          );
+        );
+        fill_slast=tx0;        
+      );  
+      gfx_a=1;
+      gfx_x=lx; gfx_y=ly; gfx_lineto(tx,ty,1) ;
+    );
+
+    ty<gfx_h ? update=1;
+
+    lx=tx; ly=ty; ly2=ty2;
+    i+=1;
+  );
+);
+
+// only update if new fft data is there or if the size changed
+update || old_w != gfx_w || old_h!=gfx_h? (
+
+old_w=gfx_w; old_h=gfx_h;
+
+gfx_r=gfx_g=gfx_b=back; gfx_a=1;
+gfx_x=gfx_y=0;
+gfx_rectto(gfx_w,gfx_h);
+
+sc=(gfx_h-20)*20/(-min_v * log(10));
+
+// draw horz grid
+
+ gfx_a=grid_a;
+gv=1;
+gv2=sl_f;
+cnt=100;
+gfx_y=-100;
+   gfx_r=r; gfx_g=g; gfx_b=b;
+while(
+  y2=(gv2+2.0*sl_f)*(sc);
+  y3=(gv2-4.1*sl_f)*(sc);
+  y2> gfx_y ? (
+    gfx_line(0,y2,gfx_w,y3,0);
+    bottom_line = gfx_y;
+    gfx_x=2; 
+    gfx_y=y2;
+    gfx_a=grid_v;
+    gfx_drawnumber(log10(gv)*20,0);
+    gfx_a=grid_a;
+    gfx_y+=gfx_texth;
+  );
+  gv*=(0.5/grid);
+  gv2+=(0.692*grid);
+  gfx_y<gfx_h*1.3 && cnt-=10 > 0;
+);
+
+wsc=scaling*gfx_w/log(1+400);
+
+// draw vert grid
+
+f=10;
+gfx_x+=4;
+lx=gfx_x;
+
+while(
+  tx = log(1.0+(f/srate*2.0)*400)*wsc;
+  dotext = tx > gfx_x && f!=0 && f!=40000 && f != 150000 && 
+  
+ (f<900 || f >= 1000 || f == 500) && (f<60000 || f>=10000);
+  tx > lx ? ( lx=tx+4; gfx_line(tx,(dotext ? 0 : gfx_texth+2),tx,gfx_h,0); );
+  dotext ? (
+    gfx_x = tx + 4;
+    gfx_y = 2;
+    gfx_a=grid_v;
+    f>=1000 ? gfx_printf("%dK",f*.001) :  gfx_printf("%d",f);
+    ;
+  );
+  
+  f += (f<100?10:f<1000?100:f<10000?1000:5000);
+   gfx_a=grid_a;
+  f < srate*0.5;
+ 
+);
+
+update ? (
+  update=0;
+  scaling = scale;
+
+  integrate_sc = 1;
+  integr > 0 ? (
+    integrate_now = time_precise();
+    integrate_en ? (
+       fps = 1/(integrate_now - integrate_lastt);
+      integrate_sc -= exp(-5 * 1000.0 * (integrate_now - integrate_lastt) / integr);
+    ) : (
+      // force overwrite of buffer
+      integrate_en = 1;
+    );
+    integrate_lastt = integrate_now;
+  ) : (
+    integrate_en = 0;
+  );
+
+  fftidx != (fft_sz|0) ? (
+    fftidx=fft_sz|0;
+    fftsize=2^(min(max(fftidx,0),11)+4);
+    integrate_sc=1;
+  );
+
+  windowsize != fftsize || windowtype != (wind|0) ? (
+    windowtype=wind|0; 
+    windowsize=fftsize;
+    dwindowpos = $pi*2/fftsize;
+    i=pwr=0;
+    loop(fftsize*.5+1,
+       windowpos=i*dwindowpos;
+       pwr += (window[i] = (
+         windowtype==1 ? 0.53836 - cos(windowpos)*0.46164 :
+         windowtype==2 ? 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) :
+         windowtype==3 ? 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) :
+          1.0));
+       i+=1;
+    );
+    pwr=.5/(pwr*2-window[i-1]);
+    loop(fftsize*.5+1,window[i-=1]*=pwr);
+    integrate_sc=1;
+  );
+
+  drawFFT(recpos, fftworkspace, integrate_buf, 0, histsize, 0.8, 0.8, 0.8);
+  drawFFT(recpos2, fftworkspace2, integrate_buf2, shift, histsize2, r2, g2, b2);
+  );
+);
